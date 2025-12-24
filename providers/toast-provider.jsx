@@ -4,5 +4,6 @@
 import { Toaster } from 'react-hot-toast';
 
 export default function ToastProvider() {
-  return <Toaster />;
+  return <Toaster position='top-right' />;
 }
+

@@ -5,16 +5,19 @@ import React, { useContext, useEffect, useState } from 'react'
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
 
-import { VideoDataContext } from '@/app/_context/VideoDataContext';
-import { db } from '@/configs/db';
-import { VideoData } from '@/configs/schema';
 import { useUser } from '@clerk/nextjs';
+import { VideoDataContext } from '@/app/_context/VideoDataContext';
+import { UserDetailContext } from '@/app/_context/UserDetailContext';
+import { db } from '@/configs/db';
+import { eq } from 'drizzle-orm';
+import { Users, VideoData } from '@/configs/schema';
 
 import SelectDuration from '@/components/create/SelectDuration';
 import SelectStyle from '@/components/create/SelectStyle';
 import SelectTopic from '@/components/create/SelectTopic'
 import { Button } from '@/components/ui/button';
 import Loader from '@/components/designs/Loader';
+import ContentDialog from '@/components/designs/ContentDialog';
 
 function Create() {
 
@@ -26,6 +29,9 @@ function Create() {
   const [imageList, setImageList] = useState();
 
   const { videoData, setVideoData } = useContext(VideoDataContext);
+  const { userDetail, setUserDetail } = useContext(UserDetailContext);
+  const [playVideo, setPlayVideo] = useState(false);
+  const [videoId, setVideoId] = useState();
 
   const { user } = useUser()
 
@@ -130,10 +136,36 @@ function Create() {
     }
     if (images.length > 0) {
       setVideoData(prev => ({ ...prev, 'ImageList': images }))
+      await GenerateSentiment(scriptData);
       setImageList(images);
     }
     setLoading(false);
   };
+
+  // Generate the Sentiment analysis
+  const GenerateSentiment = async (scriptData) => {
+    setLoading(true);
+
+    const script = scriptData.map(item => item.contentText).join(' ');
+
+    const resp = await axios.post('/api/generate-sentiment', { prompt: script });
+    console.log("Analysis Result:", resp.data);
+
+    if (resp.data && resp.data.sentiment) {
+      setVideoData(prev => ({
+        ...prev,
+        'Sentiment': resp.data.sentiment,
+        'Hashtags': resp.data.hashtags,
+        'Score': resp.data.engagementScore,
+        'Reach': resp.data.reachPrediction
+      }));
+    } else {
+      console.log("There was a problem in generating Sentiment analysis, Try again later")
+      setLoading(false);
+    }
+
+    setLoading(false);
+  }
 
   // Save all the generations to Database
   const storeVideoData = async (videoData) => {
@@ -144,16 +176,39 @@ function Create() {
       audioURL: videoData?.AudioFileURL,
       captions: videoData?.AudioCaption,
       imageList: videoData?.ImageList,
+      hashtags: videoData?.Hashtags,
+      sentiment: videoData?.Sentiment,
+      score: videoData?.Score,
+      reach: videoData?.Reach,
       createdBy: user?.primaryEmailAddress.emailAddress,
     }).returning({ id: VideoData?.id });
 
-    console.log(result);
+    if (result) {
+      await UpdateUserCredits()
+      toast.success("Content got generated successfully!")
+      setVideoId(result[0]?.id);
+      setPlayVideo(true);
+      console.log(result);
+    } else {
+      console.log("There was some issue in storing your content")
+    }
 
     setLoading(false);
   }
 
+  // Update user data after each generation
+  const UpdateUserCredits = async () => {
+    const res = await db.update(Users).set({
+      credits: userDetail?.credits - 10
+    }).where(eq(Users?.email, user?.primaryEmailAddress?.emailAddress));
+    if (res) {
+      setUserDetail(prev => ({ ...prev, "credits": userDetail?.credits - 10 }))
+      setVideoData({});
+    }
+  }
+
   useEffect(() => {
-    if (Object.keys(videoData).length == 4) {
+    if (Object.keys(videoData).length == 8) {
       storeVideoData(videoData);
       console.log(videoData);
     }
@@ -175,12 +230,21 @@ function Create() {
 
         <div className='mt-10 flex items-center gap-5 justify-end'>
           <Button variant='outline'>Reset</Button>
-          <Button onClick={GenerateVideoScript}>Generate</Button>
+          <Button
+            onClick={() => {
+              if (userDetail?.credits > 0) GenerateVideoScript();
+              else toast.error("Please upgrade your account to generate more content")
+            }}
+          >
+            Generate
+          </Button>
         </div>
 
       </div>
 
       <Loader loading={loading} />
+
+      <ContentDialog playVideo={playVideo} videoId={videoId} />
 
     </div>
   )

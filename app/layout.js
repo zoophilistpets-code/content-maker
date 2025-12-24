@@ -3,7 +3,8 @@ import { Outfit } from "next/font/google"
 
 import { ClerkProvider } from "@clerk/nextjs";
 import Provider from "./provider";
-import ToastProvider from "../lib/toast-provider";
+import ToastProvider from "@/providers/toast-provider";
+import { ThemeProvider } from "@/providers/theme-provider";
 
 export const metadata = {
   title: "Create Next App",
@@ -15,12 +16,19 @@ const outfit = Outfit({ subsets: ['latin'] })
 export default function RootLayout({ children }) {
   return (
     <ClerkProvider>
-      <html lang="en">
+      <html lang="en" suppressHydrationWarning>
         <body
           className={outfit.className}
         >
           <ToastProvider />
-          <Provider> {children}</Provider>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="system"
+            enableSystem
+            disableTransitionOnChange
+          >
+            <Provider> {children}</Provider>
+          </ThemeProvider>
         </body>
       </html>
     </ClerkProvider>
