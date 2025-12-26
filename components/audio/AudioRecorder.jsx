@@ -9,10 +9,56 @@ export function AudioRecorder({ onRecordingComplete }) {
 	const [isPaused, setIsPaused] = useState(false)
 	const [recordingTime, setRecordingTime] = useState(0)
 
-	const mediaRecorderRef = useRef < MediaRecorder | null > (null)
-	const audioChunksRef = useRef < Blob > ([])
-	const streamRef = useRef < MediaStream | null > (null)
-	const timerRef = useRef < NodeJS.Timeout | null > (null)
+	const recorder = useRef(null)
+	const streamRef = useRef(null)
+	const timerRef = useRef(null)
+	const silenceTimeoutRef = useRef(null)
+	const mediaRecorderRef = useRef(null)
+	const audioChunksRef = useRef([])
+
+	const connectToServer = async () => {
+		if (typeof window !== "undefined" && typeof navigator !== "undefined") {
+			try {
+				// Dynamically import RecordRTC only when needed
+				const RecordRTC = (await import('recordrtc')).default;
+
+				const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+				streamRef.current = stream
+
+				recorder.current = new RecordRTC(stream, {
+					type: 'audio',
+					mimeType: 'audio/webm;codecs=pcm',
+					recorderType: RecordRTC.StereoAudioRecorder,
+					timeSlice: 250,
+					desiredSampRate: 16000,
+					numberOfAudioChannels: 1,
+					bufferSize: 4096,
+					audioBitsPerSecond: 128000,
+					ondataavailable: async (blob) => {
+						// Reset the silence detection timer on audio input
+						if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+
+						// Restart the silence detection timer
+						silenceTimeoutRef.current = setTimeout(() => {
+							console.log('User stopped talking');
+							stopRecording(); // Automatically stop when silence is detected
+						}, 2000);
+					}
+				})
+
+				recorder.current.startRecording()
+				setIsRecording(true)
+				setIsPaused(false)
+				setRecordingTime(0)
+
+				timerRef.current = setInterval(() => {
+					setRecordingTime((prev) => prev + 1)
+				}, 1000)
+			} catch (err) {
+				console.error("Microphone access error:", err)
+			}
+		}
+	}
 
 	// Start recording function
 	const startRecording = async () => {
@@ -26,17 +72,22 @@ export function AudioRecorder({ onRecordingComplete }) {
 			mediaRecorderRef.current = mediaRecorder
 			audioChunksRef.current = []
 
-			mediaRecorder.ondataavailable = event => {
+			mediaRecorder.ondataavailable = (event) => {
+				console.log("Chunk received size:", event.data.size);
 				if (event.data.size > 0) {
 					audioChunksRef.current.push(event.data)
+					console.log(event);
 				}
 			}
 
 			mediaRecorder.onstop = () => {
+				const mimeType = mediaRecorderRef.current.mimeType;
 				const audioBlob = new Blob(audioChunksRef.current, {
-					type: 'audio/wav'
+					// type: 'audio/wav'
+					type: mimeType
 				})
 				onRecordingComplete(audioBlob)
+				console.log("Recorded Blob:", audioBlob);
 			}
 
 			// Start recording
@@ -47,58 +98,45 @@ export function AudioRecorder({ onRecordingComplete }) {
 
 			// Start timer
 			timerRef.current = setInterval(() => {
-				setRecordingTime(prev => prev + 1)
+				setRecordingTime((prev) => prev + 1)
 			}, 1000)
 		} catch (error) {
 			console.error('Error accessing microphone:', error)
 		}
 	}
 
-	// Pause recording function
 	const pauseRecording = () => {
-		if (mediaRecorderRef.current && isRecording) {
+		if (recorder.current && isRecording) {
 			if (isPaused) {
-				// Resume recording
-				mediaRecorderRef.current.resume()
+				recorder.current.resumeRecording()
 				setIsPaused(false)
-
-				// Restart timer
 				timerRef.current = setInterval(() => {
-					setRecordingTime(prev => prev + 1)
+					setRecordingTime((prev) => prev + 1)
 				}, 1000)
 			} else {
-				// Pause recording
-				mediaRecorderRef.current.pause()
+				recorder.current.pauseRecording()
 				setIsPaused(true)
-
-				// Stop timer
-				if (timerRef.current) {
-					clearInterval(timerRef.current)
-					timerRef.current = null
-				}
+				if (timerRef.current) clearInterval(timerRef.current)
 			}
 		}
 	}
 
-	// Stop recording function
 	const stopRecording = () => {
-		if (mediaRecorderRef.current && isRecording) {
-			// Stop recording
-			mediaRecorderRef.current.stop()
-			setIsRecording(false)
-			setIsPaused(false)
+		if (recorder.current && isRecording) {
+			recorder.current.stopRecording(() => {
+				const blob = recorder.current.getBlob()
+				onRecordingComplete(blob)
 
-			// Stop timer
-			if (timerRef.current) {
-				clearInterval(timerRef.current)
-				timerRef.current = null
-			}
+				// Cleanup
+				if (streamRef.current) {
+					streamRef.current.getTracks().forEach(track => track.stop())
+				}
+				if (timerRef.current) clearInterval(timerRef.current)
+				if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current)
 
-			// Stop all tracks on the stream
-			if (streamRef.current) {
-				streamRef.current.getTracks().forEach(track => track.stop())
-				streamRef.current = null
-			}
+				setIsRecording(false)
+				setIsPaused(false)
+			})
 		}
 	}
 
@@ -112,30 +150,23 @@ export function AudioRecorder({ onRecordingComplete }) {
 	// Cleanup on unmount
 	useEffect(() => {
 		return () => {
-			if (timerRef.current) {
-				clearInterval(timerRef.current)
-				timerRef.current = null
-			}
-
-			if (streamRef.current) {
-				streamRef.current.getTracks().forEach(track => track.stop())
-				streamRef.current = null
-			}
+			if (timerRef.current) clearInterval(timerRef.current)
+			if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current)
 		}
 	}, [])
 
 	return (
 		<div className='flex w-full flex-col items-center space-y-2'>
 			<div className='flex w-full items-center justify-center'>
-				<div className='font-mono text-lg'>{formatTime(recordingTime)}</div>
+				<div className='font-mono text-lg mt-3'>{formatTime(recordingTime)}</div>
 				{isRecording && !isPaused && (
 					<div className='ml-3 h-3 w-3 animate-pulse rounded-full bg-red-500' />
 				)}
 			</div>
 
-			<div className='flex space-x-4'>
+			<div className='flex space-x-4 mt-1'>
 				{!isRecording ? (
-					<Button onClick={startRecording} size='icon' variant='default'>
+					<Button onClick={connectToServer} size='icon' variant='default'>
 						<Mic className='h-5 w-5' />
 					</Button>
 				) : (

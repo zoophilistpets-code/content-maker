@@ -1,13 +1,12 @@
 'use client'
 
-import axios from 'axios'
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
-import AudioPlayer from '@/components/audio/audio-player'
+import AudioPlayer from '@/components/audio/AudioPlayer'
 import { AudioRecorderDialog } from '@/components/audio/AudioRecorderDialog'
-
-import { Loader } from 'lucide-react'
+import { Trash, Wand2 } from 'lucide-react'
+import axios from 'axios'
 
 // Converted Enum to a constant object
 export const AudioSource = {
@@ -16,134 +15,145 @@ export const AudioSource = {
 	RECORDING: 'RECORDING'
 }
 
-export default function AudioManager({ transcriber }) {
-	const [audioData, setAudioData] = useState(undefined)
-	const [url, setUrl] = useState(undefined)
+export default function AudioManager({ setTranscript, setLoading }) {
+	const [audioData, setAudioData] = useState()
+	const [rawBlob, setRawBlob] = useState(null) // Keep the original blob for uploading
 
-	const onUrlChange = (url) => {
-		transcriber.onInputChange()
-		setAudioData(undefined)
-		setUrl(url)
-	}
 
 	const resetAudio = () => {
-		transcriber.onInputChange()
 		setAudioData(undefined)
-		setUrl(undefined)
+		setRawBlob(null)
 	}
 
 	const setAudioFromRecording = async (data) => {
 		resetAudio()
+		setRawBlob(data) // Store the blob for the API call
 
 		const blobUrl = URL.createObjectURL(data)
+
+		// Set the state immediately with the mimeType from the blob (data.type)
+		setAudioData({
+			url: blobUrl,
+			source: AudioSource.RECORDING,
+			mimeType: data.type
+		});
+
 		const fileReader = new FileReader()
 
 		fileReader.onloadend = async () => {
-			const audioCTX = new AudioContext({ sampleRate: 16000 })
-			const arrayBuffer = fileReader.result
-			const decoded = await audioCTX.decodeAudioData(arrayBuffer)
+			try {
+				// Use the default sample rate of the user's hardware first
+				const audioCTX = new (window.AudioContext || window.webkitAudioContext)()
+				const arrayBuffer = fileReader.result
+				const decoded = await audioCTX.decodeAudioData(arrayBuffer)
 
-			setAudioData({
-				buffer: decoded,
-				url: blobUrl,
-				source: AudioSource.RECORDING,
-				mimeType: data.type
-			})
+				setAudioData(prev => ({ ...prev, buffer: decoded }));
+
+				// setAudioData({
+				// 	buffer: decoded,
+				// 	url: blobUrl,
+				// 	source: AudioSource.RECORDING,
+				// 	mimeType: data.type
+				// })
+			} catch (error) {
+				console.error("Decoding failed:", error)
+				// Fallback: set audio data even if decoding fails so the player still works
+				setAudioData({
+					url: blobUrl,
+					source: AudioSource.RECORDING,
+					mimeType: data.type
+				})
+			}
 		}
 
 		fileReader.readAsArrayBuffer(data)
 	}
 
-	const downloadAudioFromUrl = useCallback(
-		async (url, requestAbortController) => {
-			if (url) {
+	const handleTranscription = async () => {
+		if (!rawBlob) return;
+
+		try {
+			setLoading(true);
+
+			// 1. Send file to our internal API
+			const formData = new FormData();
+			formData.append('file', rawBlob, 'recording.wav');
+
+			const initResponse = await axios.post('/api/generate-text', formData);
+			const transcriptId = initResponse.data.id;
+
+			// 2. Poll our internal API for status
+			const pollInterval = setInterval(async () => {
 				try {
-					setAudioData(undefined)
+					// Hitting your local API route with the ID
+					const statusResponse = await axios.get(`/api/generate-text?id=${transcriptId}`);
 
-					const { data, headers } = await axios.get(url, {
-						signal: requestAbortController.signal,
-						responseType: 'arraybuffer'
-					})
+					const { status, text } = statusResponse.data;
 
-					let mimeType = headers['content-type']
-					if (!mimeType || mimeType === 'audio/wave') {
-						mimeType = 'audio/wav'
+					console.log("Current Status:", status);
+
+					if (status === "completed") {
+						clearInterval(pollInterval);
+						setTranscript(text); // This sets the text in your textarea
+						resetAudio();
+						setLoading(false);
+					} else if (status === "error") {
+						clearInterval(pollInterval);
+						alert("Transcription failed");
+						setLoading(false);
 					}
-
-					const audioCTX = new AudioContext({ sampleRate: 16000 })
-					const blobUrl = URL.createObjectURL(
-						new Blob([data], { type: 'audio/*' })
-					)
-
-					const decoded = await audioCTX.decodeAudioData(data)
-
-					setAudioData({
-						buffer: decoded,
-						url: blobUrl,
-						source: AudioSource.URL,
-						mimeType: mimeType
-					})
-				} catch (error) {
-					console.log('Request failed or aborted', error)
+					// If status is 'queued' or 'processing', the interval continues...
+				} catch (pollError) {
+					console.error("Polling error:", pollError);
+					clearInterval(pollInterval);
+					setLoading(false);
 				}
-			}
-		},
-		[]
-	)
+			}, 3000);
 
-	useEffect(() => {
-		if (url) {
-			const requestAbortController = new AbortController()
-			downloadAudioFromUrl(url, requestAbortController)
-			return () => {
-				requestAbortController.abort()
-			}
+		} catch (error) {
+			console.error("Frontend Error:", error);
+			setLoading(false);
 		}
-	}, [downloadAudioFromUrl, url])
+	};
 
 	return (
-		<section className='w-full max-w-2xl rounded-lg border p-6 shadow-md'>
+		<section className='w-full rounded-lg border p-6 shadow-md'>
 			<div className='flex h-full flex-col items-start gap-6'>
-				<div className='flex w-full items-center justify-between'>
-					<UrlDialog onUrlChange={onUrlChange} />
 
-					<AudioRecorderDialog
-						onLoad={data => {
-							transcriber.onInputChange()
-							setAudioFromRecording(data)
-						}}
-					/>
+				<div className='flex w-full items-center justify-between'>
+
+					<h2>Speak on your way and the content will be generated!</h2>
+
+					<div className='flex items-center justify-end gap-4'>
+						{
+							!audioData && (
+								<AudioRecorderDialog
+									onLoad={data => {
+										setAudioFromRecording(data)
+									}}
+								/>
+							)
+						}
+						{
+							audioData && (
+								<div className="gap-2">
+									<Button onClick={handleTranscription}>
+										<Wand2 size={16} /> Transcribe
+									</Button>
+									<Button variant='outline' onClick={resetAudio}>
+										<Trash /> Reset
+									</Button>
+								</div>
+							)
+						}
+					</div>
 				</div>
 
 				{audioData && (
-					<>
-						<AudioPlayer
-							audioUrl={audioData.url}
-							mimeType={audioData.mimeType}
-						/>
-
-						<div className='mt-auto flex w-full items-center justify-between'>
-							<Button onClick={() => transcriber.start(audioData.buffer)}>
-								{transcriber.isModelLoading ? (
-									<>
-										<Loader className='animate-spin' />
-										<span>Loading model</span>
-									</>
-								) : transcriber.isProcessing ? (
-									<>
-										<Loader className='animate-spin' />
-										<span>Transcribing</span>
-									</>
-								) : (
-									<span>Transcribe</span>
-								)}
-							</Button>
-
-							<Button variant='outline' onClick={resetAudio}>
-								Reset
-							</Button>
-						</div>
-					</>
+					<AudioPlayer
+						audioUrl={audioData.url}
+						mimeType={audioData.mimeType}
+					/>
 				)}
 			</div>
 		</section>

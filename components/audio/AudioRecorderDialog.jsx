@@ -16,8 +16,8 @@ import { Download, Mic } from 'lucide-react'
 
 export function AudioRecorderDialog({ onLoad }) {
 	const [isOpen, setIsOpen] = useState(false)
-	const [audioData, setAudioData] = useState < Blob | null > (null)
-	const [audioUrl, setAudioUrl] = useState < string | null > (null)
+	const [audioData, setAudioData] = useState(null)
+	const [audioUrl, setAudioUrl] = useState(null)
 
 	const handleAudioRecorded = (blob) => {
 		setAudioData(blob)

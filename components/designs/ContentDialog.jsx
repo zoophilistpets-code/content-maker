@@ -11,15 +11,19 @@ import { eq } from 'drizzle-orm'
 import {
 	Dialog,
 	DialogContent,
-	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from '@/components/ui/button'
+import MetaDataGrid from './MetaDataGrid'
+import { Loader2 } from 'lucide-react'
 
 function ContentDialog({ playVideo, videoId }) {
 
 	const [openDialog, setOpenDialog] = useState(true);
 	const [videoData, setVideoData] = useState();
+
+	const [loading, setLoading] = useState(false);
+	const [isExporting, setIsExporting] = useState(false);
 
 	const [durationInFrame, setDurationInFrame] = useState(120);
 
@@ -40,6 +44,39 @@ function ContentDialog({ playVideo, videoId }) {
 		}
 	}
 
+	const handleExport = async () => {
+		setIsExporting(true);
+		try {
+			const response = await fetch('/api/render-video', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					videoId: videoId,
+					durationInFrame: durationInFrame,
+					...videoData // This sends captions, images, audio, etc.
+				}),
+			});
+
+			const result = await response.json();
+
+			if (result.downloadUrl) {
+				// Trigger browser download
+				const link = document.createElement('a');
+				link.href = result.downloadUrl;
+				link.setAttribute('download', `video-${videoId}.mp4`);
+				document.body.appendChild(link);
+				link.click();
+				link.remove();
+			} else {
+				alert("Render failed: " + result.error);
+			}
+		} catch (error) {
+			console.error("Export Error:", error);
+		} finally {
+			setIsExporting(false);
+		}
+	};
+
 	useEffect(() => {
 		setOpenDialog(!openDialog)
 		if (videoId) GetVideoData();
@@ -48,43 +85,53 @@ function ContentDialog({ playVideo, videoId }) {
 	return (
 		<div>
 			<Dialog open={openDialog}>
-				<DialogContent className="flex flex-col items-center">
-					<DialogHeader>
-						<DialogTitle className={'text-xl font-bold my-5'}>
-							Your content is ready to rock the media!
-						</DialogTitle>
-					</DialogHeader>
+				<DialogContent className="flex flex-col items-center max-w-5xl! w-[95vw] h-[90vh]">
 
-					{/* ✅ FIX: Player is now OUTSIDE of DialogDescription to avoid <p> nesting errors */}
-					<div className="flex flex-col items-center">
-						{videoData ? (
-							<Player
-								component={RemotionVideo}
-								durationInFrames={durationInFrame}
-								compositionWidth={300}
-								compositionHeight={450}
-								fps={30}
-								controls={true}
-								inputProps={{
-									...videoData,
-									durationInFrame: durationInFrame
-								}}
-							/>
-						) : (
-							<div className="h-112.5 w-75 bg-gray-200 animate-pulse flex items-center justify-center rounded-lg">
-								Loading Assets...
-							</div>
-						)}
+					<DialogTitle></DialogTitle>
 
-						<div className='flex gap-4 mt-6'>
-							<Button variant='outline' onClick={() => setOpenDialog(false)}>Cancel</Button>
-							<Button>Export</Button>
+					<div className="flex items-center gap-10 mt-1">
+						{/* Player */}
+						<div>
+							{videoData ? (
+								<Player
+									component={RemotionVideo}
+									durationInFrames={durationInFrame}
+									compositionWidth={300}
+									compositionHeight={450}
+									fps={30}
+									controls={true}
+									inputProps={{
+										...videoData,
+										durationInFrame: durationInFrame
+									}}
+								/>
+							) : (
+								<div className="h-112.5 w-75 bg-gray-200 animate-pulse flex items-center justify-center rounded-lg">
+									Loading Assets...
+								</div>
+							)}
 						</div>
+
+						{/* Sentiment Analysis */}
+						{videoData && (
+							<div>
+								<MetaDataGrid videoData={videoData} />
+								<Button variant='outline' className={'w-full mt-2'} onClick={() => setOpenDialog(false)}>Close</Button>
+								<div className='flex gap-4 mt-4'>
+									
+									{/* <Button onClick={handleExport} className="bg-primary hover:bg-primary/90">
+										{loading ? <Loader2 className="animate-spin" /> : "Export MP4"}
+									</Button> */}
+								</div>
+							</div>
+						)
+						}
 					</div>
 
 				</DialogContent>
 			</Dialog>
 		</div>
+
 	)
 }
 

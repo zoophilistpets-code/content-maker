@@ -96,7 +96,7 @@ export function AppSidebar({
       </SidebarContent>
 
       <SidebarFooter>
-        <Link href={'/account'}>
+        <Link href={'/dashboard/account'}>
           <NavUser />
         </Link>
       </SidebarFooter>
